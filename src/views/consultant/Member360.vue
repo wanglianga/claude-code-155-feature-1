@@ -6,6 +6,8 @@ import { useDataStore } from '../../stores/data'
 import TrainingTimeline from '../../components/TrainingTimeline.vue'
 import ProfessionalProfile from '../../components/ProfessionalProfile.vue'
 import PackageCard from '../../components/PackageCard.vue'
+import RiskRestrictionCard from '../../components/RiskRestrictionCard.vue'
+import RiskNoticeBanner from '../../components/RiskNoticeBanner.vue'
 
 const route = useRoute()
 const auth = useAuthStore()
@@ -20,6 +22,13 @@ const trend = computed(() => data.painTrend(mid))
 const attendance = computed(() => data.attendanceOf(mid))
 const renewals = computed(() => data.renewals.filter(r => r.memberId === mid))
 const complaints = computed(() => data.complaints.filter(c => c.memberId === mid && c.status !== '已关闭'))
+const risk = computed(() => data.riskSummaryOf(mid))
+const riskConfirmations = computed(() => data.riskConfirmationsOf(mid))
+const groupBookings = computed(() =>
+  data.memberGroupBookings(mid)
+    .map(b => ({ b, gc: data.classById(b.classId) }))
+    .filter(x => x.gc),
+)
 
 const follow = reactive({ summary: '', result: '跟进中' as '跟进中' | '已续费' | '暂缓' })
 const renewSpec = reactive({ name: '私教 24 节 · 进阶周期', totalSessions: 24, validDays: 120, weekday: 2, time: '19:00-20:00' })
@@ -71,6 +80,10 @@ function reply(cId: string) {
 
     <div v-if="msg" class="banner warn">{{ msg }}</div>
 
+    <!-- 风险动作限制：顾问只读，排课/团课沟通时必须参照 -->
+    <RiskNoticeBanner v-if="risk.hasRisk" :member-id="mid" show-prep
+      title="该会员有教练标记的风险动作限制：团课报名须提示风险并建议低强度课程" />
+
     <div class="grid cols-4">
       <div class="card stat"><div class="num">{{ attendance.done }}</div><div class="lbl">已完成课程</div></div>
       <div class="card stat"><div class="num">{{ attendance.leave }}</div><div class="lbl">请假次数</div></div>
@@ -115,6 +128,39 @@ function reply(cId: string) {
     <div class="card">
       <h3>教练专业档案</h3>
       <ProfessionalProfile :member-id="mid" viewer-role="consultant" />
+    </div>
+
+    <!-- 风险动作限制（教练专业记录，顾问只读） -->
+    <div v-if="risk.hasRisk" class="card">
+      <h3>⚠️ 运动风险动作限制（教练专业记录 · 顾问只读）</h3>
+      <RiskRestrictionCard :member-id="mid" show-released />
+    </div>
+
+    <!-- 高难体式二次确认记录 -->
+    <div v-if="riskConfirmations.length" class="card">
+      <h3>高难体式二次确认记录</h3>
+      <div v-for="c in riskConfirmations" :key="c.id" class="mb8" style="border-bottom: 1px solid var(--line); padding-bottom: 8px; font-size: 13px">
+        <div class="between">
+          <b>{{ c.createdAt }} · {{ c.move }}</b>
+          <span class="tag" :class="c.decision === '拒绝该动作' ? 'danger' : c.decision === '坚持完成（已告知风险）' ? 'amber' : ''">{{ c.decision }}</span>
+        </div>
+        <div v-if="c.adjustedMove" class="mt8">调整方案：{{ c.adjustedMove }}</div>
+        <div class="muted">{{ c.note }}</div>
+      </div>
+    </div>
+
+    <!-- 团课报名与风险告知记录 -->
+    <div v-if="groupBookings.length" class="card">
+      <h3>团课报名与风险告知</h3>
+      <div v-for="{ b, gc } in groupBookings" :key="b.id" class="mb8" style="border-bottom: 1px solid var(--line); padding-bottom: 8px; font-size: 13px">
+        <b>{{ gc!.name }}</b>
+        <span class="tag" :class="gc!.intensity === '高强度' ? 'danger' : gc!.intensity === '中强度' ? 'amber' : ''">{{ gc!.intensity }}</span>
+        <span class="muted">{{ gc!.date }} {{ gc!.time }}</span>
+        <div v-if="data.matchMemberMoves(mid, gc!.moves).length" class="tag danger mt8">
+          本课命中禁忌：{{ data.matchMemberMoves(mid, gc!.moves).map(h => h.pair.forbidden).join('、') }}
+        </div>
+        <div class="muted">前台建议：{{ b.advisory }}</div>
+      </div>
     </div>
 
     <!-- 续费跟进 -->

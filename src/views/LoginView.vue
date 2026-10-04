@@ -21,9 +21,9 @@ const groups = computed(() => {
 
 const roleLabel: Record<Role, string> = { member: '会员', coach: '教练', consultant: '顾问' }
 const roleDesc: Record<Role, string> = {
-  member: '预约体验课 / 查看课表课包 / 请假改期 / 不适上报',
-  coach: '周课表 / 体验测评 / 课后记录 / 课程调整',
-  consultant: '转化看板 / 安排体验课 / 异常工单 / 续费跟进',
+  member: '预约体验课 / 查看课表课包 / 风险限制与团课 / 请假改期 / 不适上报',
+  coach: '周课表风险提醒 / 标记禁止与替代动作 / 团课课前核对 / 高难体式二次确认',
+  consultant: '转化看板 / 安排体验课 / 团课报名风险提示 / 异常工单 / 续费跟进',
 }
 
 function login() {

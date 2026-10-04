@@ -4,6 +4,8 @@ import { useAuthStore } from '../../stores/auth'
 import { useDataStore } from '../../stores/data'
 import TrainingTimeline from '../../components/TrainingTimeline.vue'
 import ProfessionalProfile from '../../components/ProfessionalProfile.vue'
+import RiskRestrictionCard from '../../components/RiskRestrictionCard.vue'
+import { weekdayCn } from '../../utils/date'
 
 const auth = useAuthStore()
 const data = useDataStore()
@@ -12,6 +14,13 @@ const mid = auth.current!.id
 const records = computed(() => data.recordsOf(mid))
 const trend = computed(() => data.painTrend(mid))
 const attendance = computed(() => data.attendanceOf(mid))
+const risk = computed(() => data.riskSummaryOf(mid))
+const confirmations = computed(() => data.riskConfirmationsOf(mid))
+const groupBookings = computed(() =>
+  data.memberGroupBookings(mid)
+    .map(b => ({ b, gc: data.classById(b.classId) }))
+    .filter(x => x.gc),
+)
 
 function sessionOf(id: string) {
   return data.sessions.find(s => s.id === id)
@@ -40,6 +49,35 @@ function sessionOf(id: string) {
         <span>{{ t.before }} → {{ t.after }} 分</span>
         <span v-if="t.after > t.before" class="tag danger">加重</span>
         <span v-else-if="t.after < t.before" class="tag">缓解</span>
+      </div>
+    </div>
+
+    <div class="card" v-if="risk.hasRisk">
+      <h3>⚠️ 我的风险动作限制（教练标记，排课与团课自动生效）</h3>
+      <RiskRestrictionCard :member-id="mid" show-released />
+    </div>
+
+    <div v-if="confirmations.length" class="card">
+      <h3>高难体式风险确认记录</h3>
+      <div v-for="c in confirmations" :key="c.id" class="mb8" style="border-bottom: 1px solid var(--line); padding-bottom: 8px; font-size: 13px">
+        <div class="between">
+          <b>{{ c.createdAt }} · {{ c.move }}</b>
+          <span class="tag" :class="c.decision === '拒绝该动作' ? 'danger' : c.decision === '坚持完成（已告知风险）' ? 'amber' : ''">{{ c.decision }}</span>
+        </div>
+        <div v-if="c.adjustedMove" class="mt8">调整方案：{{ c.adjustedMove }}</div>
+        <div class="muted">{{ c.note }}</div>
+      </div>
+    </div>
+
+    <div v-if="groupBookings.length" class="card">
+      <h3>我的团课报名</h3>
+      <div v-for="{ b, gc } in groupBookings" :key="b.id" class="mb8" style="font-size: 13px; border-bottom: 1px dashed var(--line); padding-bottom: 6px">
+        <b>{{ gc!.name }}</b>
+        <span class="tag" :class="gc!.intensity === '高强度' ? 'danger' : gc!.intensity === '中强度' ? 'amber' : ''">{{ gc!.intensity }}</span>
+        <span class="muted">{{ gc!.date }}（{{ weekdayCn(gc!.date) }}）{{ gc!.time }} · {{ data.coachById(gc!.coachId)?.name }}</span>
+        <div v-if="data.matchMemberMoves(mid, gc!.moves).length" class="tag clay mt8">
+          本课教练会为你避开：{{ data.matchMemberMoves(mid, gc!.moves).map(h => h.pair.forbidden).join('、') }}
+        </div>
       </div>
     </div>
 

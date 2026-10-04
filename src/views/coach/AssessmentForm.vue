@@ -1,8 +1,11 @@
 <script setup lang="ts">
-import { computed, reactive } from 'vue'
+import { computed, reactive, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useAuthStore } from '../../stores/auth'
 import { useDataStore } from '../../stores/data'
+import RiskRestrictionEditor from '../../components/RiskRestrictionEditor.vue'
+import RiskRestrictionCard from '../../components/RiskRestrictionCard.vue'
+import type { RiskRestrictionInput } from '../../stores/data'
 
 const route = useRoute()
 const router = useRouter()
@@ -13,6 +16,10 @@ const booking = computed(() => data.bookings.find(b => b.id === (route.params.bo
 const member = computed(() => booking.value ? data.accountById(booking.value.memberId) : undefined)
 const existing = computed(() => booking.value ? data.assessments.find(a => a.bookingId === booking.value!.id) : undefined)
 
+const editorRef = ref<InstanceType<typeof RiskRestrictionEditor>>()
+
+// 会员预约时填写过疼痛部位 → 默认要求建立风险动作限制
+const enableRestriction = ref(true)
 const form = reactive({
   posture: '',
   movementLimits: '',
@@ -27,8 +34,17 @@ function submit() {
   for (const k of ['posture', 'movementLimits', 'courseAdvice', 'riskNotice'] as const) {
     if (!form[k].trim()) { alert('体态评估、动作限制、课程建议、风险提示均为必填'); return }
   }
-  if (!confirm('提交后测评将签名锁定，顾问端只读不可修改。确认提交？')) return
-  data.submitAssessment(b.id, auth.current!.id, { ...form })
+  let restriction: RiskRestrictionInput | undefined
+  if (enableRestriction.value && editorRef.value) {
+    const err = editorRef.value.validate()
+    if (err) { alert(err); return }
+    restriction = editorRef.value.getData()
+  }
+  const msg = restriction
+    ? '提交后测评将签名锁定，风险动作限制立即生效：后续排课自动提醒其他教练避开高风险体式、准备替代器械，团课报名时前台也会收到预警。确认提交？'
+    : '提交后测评将签名锁定，顾问端只读不可修改。确认提交？'
+  if (!confirm(msg)) return
+  data.submitAssessment(b.id, auth.current!.id, { ...form, restriction })
   router.push('/coach')
 }
 </script>
@@ -84,9 +100,36 @@ function submit() {
           <label>推荐套餐</label>
           <input v-model="form.recommendedPackage" />
         </div>
-        <button @click="submit">签名并提交测评</button>
       </div>
+    </div>
+
+    <!-- 已提交：展示随测评生效的风险动作限制 -->
+    <div v-if="existing" class="card">
+      <h3>⚠️ 运动风险动作限制（随测评生效，排课/团课自动预警）</h3>
+      <RiskRestrictionCard :member-id="booking.memberId" />
+    </div>
+
+    <!-- 未提交：标记禁止动作与替代动作 -->
+    <div v-else class="card">
+      <div class="between">
+        <h3 style="margin: 0">⚠️ 运动风险动作限制（体验课发现不适时在此标记）</h3>
+        <label class="check-line">
+          <input type="checkbox" v-model="enableRestriction" style="width: auto" />
+          本次测评同步建立风险动作限制
+        </label>
+      </div>
+      <p class="muted">
+        标记后立即生效：其他教练排课时自动看到禁忌提醒并准备<b>替代器械与辅助动作</b>；
+        会员报名团课时，前台会收到风险提示并建议低强度课程。
+      </p>
+      <RiskRestrictionEditor v-if="enableRestriction" ref="editorRef" :initial-body-part="booking.pains[0]?.part" />
+      <div v-else class="empty">本次测评不建立风险动作限制（会员无明显不适时可不勾选）</div>
+      <button class="mt16" @click="submit">签名并提交测评</button>
     </div>
   </div>
   <div v-else class="page"><div class="empty">预约不存在</div></div>
 </template>
+
+<style scoped>
+.check-line { display: flex; align-items: center; gap: 6px; font-size: 14px; color: var(--ink); margin: 0; white-space: nowrap; }
+</style>

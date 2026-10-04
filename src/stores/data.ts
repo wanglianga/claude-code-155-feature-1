@@ -1,15 +1,32 @@
 import { defineStore } from 'pinia'
 import type {
   Account, Assessment, CoachProfile, Complaint, CoursePackage, ExperienceBooking,
-  LeaveRequest, PainChange, RenewalFollowUp, SchedulePlan, Session, SessionRecord,
+  GroupBooking, GroupClass, LeaveRequest, PainChange, RenewalFollowUp, RiskConfirmation,
+  RiskDecision, RiskRestriction, SchedulePlan, Session, SessionRecord,
   Ticket, TicketType, TimelineEvent, TimelineKind,
 } from '../types'
 import { buildSeed, SEED_VERSION, type SeedState } from '../data/seed'
+import { matchRestrictionMoves } from '../data/catalog'
 import { addDays, daysBetween, nextWeekday, nowStr, today, uid, weekdayCn } from '../utils/date'
 
 const KEY = `yoga_db_v${SEED_VERSION}`
 
 export interface WeekdaySlot { weekday: number; time: string }
+
+export interface RiskHit {
+  restriction: RiskRestriction
+  pair: RiskRestriction['pairs'][number]
+  move: string
+}
+
+export interface RiskRestrictionInput {
+  bodyPart: string
+  level: RiskRestriction['level']
+  pairs: RiskRestriction['pairs']
+  equipment: string[]
+  assists: string[]
+  generalNotice: string
+}
 
 export const useDataStore = defineStore('data', {
   state: (): SeedState => buildSeed(),
@@ -101,6 +118,63 @@ export const useDataStore = defineStore('data', {
         upcoming: ss.filter(x => x.status === '待上课').length,
       }
     },
+
+    // ---- 运动风险动作限制 ----
+    restrictionsOf: (s) => (memberId: string) =>
+      s.restrictions.filter(r => r.memberId === memberId && r.status === '生效中')
+        .sort((a, b) => b.createdAt.localeCompare(a.createdAt)),
+
+    riskConfirmationsOf: (s) => (memberId: string) =>
+      s.riskConfirmations.filter(c => c.memberId === memberId).sort((a, b) => b.createdAt.localeCompare(a.createdAt)),
+
+    /** 会员当前风险汇总（供排课页、团课报名、档案卡共用） */
+    riskSummaryOf(s) {
+      return (memberId: string) => {
+        const list = this.restrictionsOf(memberId) as RiskRestriction[]
+        const equipment = Array.from(new Set(list.flatMap(r => r.equipment)))
+        const assists = Array.from(new Set(list.flatMap(r => r.assists)))
+        const bodyParts = Array.from(new Set(list.map(r => r.bodyPart)))
+        const level: RiskRestriction['level'] | '' = list.some(r => r.level === '高风险') ? '高风险' : list.length ? '中风险' : ''
+        return { list, count: list.length, level, bodyParts, equipment, assists, hasRisk: list.length > 0 }
+      }
+    },
+
+    /** 一份体式清单与会员禁忌的命中结果 */
+    matchMemberMoves: (s) => (memberId: string, moves: string[]): RiskHit[] => {
+      const list = s.restrictions.filter(r => r.memberId === memberId && r.status === '生效中')
+      const raw = matchRestrictionMoves(list, moves)
+      // 同一禁止动作可能被多个团课体式命中，按 pair 去重
+      const seen = new Set<string>()
+      const out: RiskHit[] = []
+      for (const h of raw) {
+        const key = h.restriction.id + '|' + h.pair.forbidden
+        if (!seen.has(key)) { seen.add(key); out.push(h) }
+      }
+      return out
+    },
+
+    // ---- 团课 ----
+    classById: (s) => (id: string) => s.groupClasses.find(c => c.id === id),
+    upcomingGroupClasses: (s) =>
+      s.groupClasses.filter(c => c.date >= today()).sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time)),
+
+    classBookings: (s) => (classId: string) => s.groupBookings.filter(b => b.classId === classId && b.status === '已报名'),
+    memberGroupBookings: (s) => (memberId: string) =>
+      s.groupBookings.filter(b => b.memberId === memberId && b.status === '已报名'),
+    classMemberBooked: (s) => (classId: string, memberId: string) =>
+      s.groupBookings.some(b => b.classId === classId && b.memberId === memberId && b.status === '已报名'),
+
+    /** 会员命中风险的待上团课（前台与教练共用） */
+    riskyGroupBookingsOf() {
+      return (memberId: string) => {
+        const bookings = this.memberGroupBookings(memberId) as { classId: string }[]
+        return bookings
+          .map(b => this.classById(b.classId))
+          .filter((c): c is GroupClass => !!c)
+          .map(c => ({ gc: c, hits: this.matchMemberMoves(memberId, c.moves) }))
+          .filter(x => x.hits.length > 0)
+      }
+    },
   },
 
   actions: {
@@ -157,17 +231,123 @@ export const useDataStore = defineStore('data', {
     },
 
     // ---------- 教练：填写体验测评（签名后锁定，顾问只读） ----------
-    submitAssessment(bookingId: string, coachId: string, payload: { posture: string; movementLimits: string; courseAdvice: string; riskNotice: string; recommendedPackage: string }) {
+    submitAssessment(bookingId: string, coachId: string, payload: {
+      posture: string; movementLimits: string; courseAdvice: string; riskNotice: string
+      recommendedPackage: string; restriction?: RiskRestrictionInput
+    }) {
       const b = this.bookings.find(x => x.id === bookingId)
       if (!b) return
       b.status = '已完成测评'
       const coach = this.coachById(coachId)
-      this.assessments.push({
+      const assessment: Assessment = {
         id: uid('as'), bookingId, memberId: b.memberId, coachId, createdAt: nowStr(),
-        ...payload, coachSignedAt: nowStr(),
-      })
+        posture: payload.posture, movementLimits: payload.movementLimits,
+        courseAdvice: payload.courseAdvice, riskNotice: payload.riskNotice,
+        recommendedPackage: payload.recommendedPackage, coachSignedAt: nowStr(),
+      }
+      this.assessments.push(assessment)
       this.log(b.memberId, '体验测评', 'coach', coach?.name ?? '', '完成体验课测评',
         `${payload.posture.slice(0, 60)}…；建议：${payload.recommendedPackage}；风险提示已签署。`, true)
+      // 测评页可同时标记风险动作限制，提交后立即对全部排课与团课报名生效
+      if (payload.restriction && payload.restriction.pairs.length) {
+        this.addRiskRestriction(b.memberId, coachId, payload.restriction, '体验测评', assessment.id, coach?.name ?? '教练')
+      }
+      this.persist()
+    },
+
+    // ---------- 风险动作限制 ----------
+    addRiskRestriction(memberId: string, coachId: string, input: RiskRestrictionInput,
+      source: RiskRestriction['source'], assessmentId: string | undefined, coachName: string) {
+      const pairs = input.pairs.filter(p => p.forbidden.trim() && p.alternative.trim())
+      if (!pairs.length) return
+      const rr: RiskRestriction = {
+        id: uid('rr'), memberId, coachId, source, assessmentId, createdAt: nowStr(),
+        bodyPart: input.bodyPart.trim() || '未注明部位', level: input.level,
+        pairs, equipment: input.equipment, assists: input.assists,
+        generalNotice: input.generalNotice.trim(), status: '生效中',
+      }
+      this.restrictions.unshift(rr)
+      const forbidden = pairs.map(p => p.forbidden).join('、')
+      const alt = pairs.map(p => p.alternative).join('、')
+      const equip = input.equipment.length ? `；替代器械：${input.equipment.join('、')}` : ''
+      const assist = input.assists.length ? `；辅助：${input.assists.join('、')}` : ''
+      this.log(memberId, '风险限制', 'coach', coachName,
+        `标记${rr.bodyPart}${rr.level}动作限制（${source}）`,
+        `禁止动作：${forbidden}；替代动作：${alt}${equip}${assist}。限制立即生效，其他教练排课与团课报名将自动预警。`, true)
+      this.persist()
+    },
+
+    releaseRestriction(id: string, coachId: string, note: string, coachName: string) {
+      const rr = this.restrictions.find(x => x.id === id)
+      if (!rr || rr.status !== '生效中') return
+      rr.status = '已解除'
+      rr.releasedAt = nowStr()
+      rr.releasedBy = coachId
+      rr.releaseNote = note
+      this.log(rr.memberId, '限制解除', 'coach', coachName, '解除风险动作限制',
+        `部位：${rr.bodyPart}；解除说明：${note}`, true)
+      this.persist()
+    },
+
+    /** 会员坚持挑战高难体式：教练再次确认风险并记录拒绝/调整方案 */
+    recordRiskConfirmation(input: {
+      memberId: string; coachId: string; move: string; decision: RiskDecision
+      adjustedMove?: string; note: string; informed: boolean; sessionId?: string; groupClassId?: string
+    }, coachName: string) {
+      const rec: RiskConfirmation = {
+        id: uid('rcf'), memberId: input.memberId, coachId: input.coachId, sessionId: input.sessionId,
+        groupClassId: input.groupClassId, move: input.move, createdAt: nowStr(),
+        decision: input.decision, adjustedMove: input.adjustedMove, note: input.note, informed: input.informed,
+      }
+      this.riskConfirmations.unshift(rec)
+      const decisionText: Record<RiskDecision, string> = {
+        调整为替代方案: `调整为替代方案：${input.adjustedMove ?? '—'}`,
+        拒绝该动作: '当场拒绝该动作',
+        '坚持完成（已告知风险）': '会员仍坚持完成，已明确告知风险并记录',
+      }
+      this.log(input.memberId, '风险确认', 'coach', coachName, '高难体式二次确认',
+        `体式：${input.move}；处理：${decisionText[input.decision]}；${input.note}`, true)
+      this.persist()
+    },
+
+    // ---------- 团课报名（前台） ----------
+    bookGroupClass(classId: string, memberId: string, consultantId: string, acknowledged: boolean,
+      advisory: string, consultantName: string) {
+      const gc = this.classById(classId)
+      if (!gc) return
+      const gb: GroupBooking = {
+        id: uid('gb'), classId, memberId, consultantId, createdAt: nowStr(),
+        acknowledged, advisory, status: '已报名',
+      }
+      this.groupBookings.push(gb)
+      const hits = this.matchMemberMoves(memberId, gc.moves)
+      const hitText = hits.length
+        ? `该课命中 ${hits.length} 项动作限制（${hits.map(h => h.pair.forbidden).join('、')}），`
+        : ''
+      this.log(memberId, '团课报名', 'consultant', consultantName, '团课报名',
+        `报名「${gc.name}」（${gc.date} ${gc.time}，${gc.intensity}）。${hitText}前台建议：${advisory}；风险告知${acknowledged ? '已确认' : '未确认'}。`)
+      this.persist()
+    },
+
+    cancelGroupBooking(bookingId: string, reason: string, actorRole: 'member' | 'consultant', actorName: string) {
+      const gb = this.groupBookings.find(b => b.id === bookingId)
+      if (!gb || gb.status !== '已报名') return
+      gb.status = '已取消'
+      gb.cancelReason = reason
+      const gc = this.classById(gb.classId)
+      this.log(gb.memberId, '团课退订', actorRole, actorName, '取消团课报名',
+        `「${gc?.name ?? ''}」退订原因：${reason}`)
+      this.persist()
+    },
+
+    /** 顾问/前台发布新团课 */
+    publishGroupClass(input: { name: string; coachId: string; date: string; time: string; intensity: GroupClass['intensity']; moves: string[]; equipment: string[]; note: string; capacity?: number }) {
+      const gc: GroupClass = {
+        id: uid('gc'), coachId: input.coachId, date: input.date, time: input.time,
+        name: input.name, intensity: input.intensity, capacity: input.capacity ?? 10,
+        moves: input.moves, equipment: input.equipment, note: input.note,
+      }
+      this.groupClasses.push(gc)
       this.persist()
     },
 

@@ -14,6 +14,7 @@ const kindColor: Record<string, string> = {
   预约体验: 'gray', 安排体验: 'gray', 购课: '', 排课: 'gray',
   上课记录: '', 请假: 'amber', 改期: 'amber', 不适上报: 'danger',
   课程调整: 'clay', 更换教练: 'clay', 续费: '', 投诉: 'danger', 工单处理: 'gray', 体验测评: 'clay',
+  风险限制: 'danger', 风险确认: 'danger', 限制解除: '', 团课报名: 'clay', 团课退订: 'gray',
 }
 </script>
 

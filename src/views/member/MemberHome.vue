@@ -15,6 +15,12 @@ const upcoming = computed(() => data.upcomingSessions(mid))
 const booking = computed(() => data.bookingOf(mid))
 const assessment = computed(() => data.latestAssessment(mid))
 const prog = computed(() => pkg.value ? data.progressOf(pkg.value) : null)
+const risk = computed(() => data.riskSummaryOf(mid))
+const groupBookings = computed(() =>
+  data.memberGroupBookings(mid)
+    .map(b => data.classById(b.classId))
+    .filter((c): c is NonNullable<typeof c> => !!c),
+)
 
 // ---- 确认购课 ----
 const showPurchase = ref(false)
@@ -50,6 +56,13 @@ const expSession = computed(() => upcoming.value.find(s => s.isExperience))
     </div>
     <div v-if="prog?.behind" class="banner warn">
       📉 课消进度落后：按当前上课频率，课包到期前可能上不完，建议与顾问协商加课或调整排课。
+    </div>
+
+    <!-- 风险动作限制生效提醒 -->
+    <div v-if="risk.hasRisk" class="banner danger">
+      ⚠️ 你的<b>{{ risk.bodyParts.join('、') }}</b>存在{{ risk.level }}动作限制（{{ risk.count }} 张限制卡）：
+      教练排课时会自动避开禁忌体式、准备替代器械；报名团课时前台会提示并优先推荐低强度课程。
+      <router-link to="/member/records" style="margin-left: 6px">查看限制明细 →</router-link>
     </div>
 
     <!-- 体验课流程状态 -->
@@ -117,6 +130,29 @@ const expSession = computed(() => upcoming.value.find(s => s.isExperience))
         </tbody>
       </table>
       <div v-else class="empty">暂无待上课程</div>
+    </div>
+
+    <!-- 已报名团课 -->
+    <div v-if="groupBookings.length" class="card">
+      <h3>已报名团课</h3>
+      <table class="plain">
+        <thead><tr><th>日期</th><th>课程</th><th>强度</th><th>带课教练</th><th>风险提示</th></tr></thead>
+        <tbody>
+          <tr v-for="c in groupBookings" :key="c.id">
+            <td>{{ c.date }}（{{ weekdayCn(c.date) }}）{{ c.time }}</td>
+            <td>{{ c.name }}</td>
+            <td><span class="tag" :class="c.intensity === '高强度' ? 'danger' : c.intensity === '中强度' ? 'amber' : ''">{{ c.intensity }}</span></td>
+            <td>{{ data.coachById(c.coachId)?.name }}</td>
+            <td>
+              <span v-if="data.matchMemberMoves(mid, c.moves).length" class="tag danger">
+                教练将避开：{{ data.matchMemberMoves(mid, c.moves).map(h => h.pair.forbidden).join('、') }}
+              </span>
+              <span v-else-if="risk.hasRisk" class="tag">已核对，本课无禁忌体式</span>
+              <span v-else class="muted">—</span>
+            </td>
+          </tr>
+        </tbody>
+      </table>
     </div>
   </div>
 </template>

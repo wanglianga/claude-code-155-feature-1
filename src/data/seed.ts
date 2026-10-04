@@ -1,6 +1,7 @@
 import type {
   Account, Assessment, CoachProfile, Complaint, CoursePackage, ExperienceBooking,
-  LeaveRequest, RenewalFollowUp, SchedulePlan, Session, SessionRecord, Ticket, TimelineEvent,
+  GroupBooking, GroupClass, LeaveRequest, RenewalFollowUp, RiskConfirmation,
+  RiskRestriction, SchedulePlan, Session, SessionRecord, Ticket, TimelineEvent,
 } from '../types'
 import { addDays, daysAgo, nowStr, today, weekdayCn } from '../utils/date'
 
@@ -17,6 +18,10 @@ export interface SeedState {
   tickets: Ticket[]
   renewals: RenewalFollowUp[]
   complaints: Complaint[]
+  restrictions: RiskRestriction[]
+  riskConfirmations: RiskConfirmation[]
+  groupClasses: GroupClass[]
+  groupBookings: GroupBooking[]
   timeline: TimelineEvent[]
 }
 
@@ -242,6 +247,101 @@ export function buildSeed(): SeedState {
     { id: 'cp_he', memberId: IDS.mHe, content: '最近两周想约的晚间时段总是约满，希望增加排课选择。', createdAt: daysAgo(3), status: '待处理', reply: '' },
   ]
 
+  // ---------- 运动风险动作限制（教练在测评页标记，排课/团课自动预警） ----------
+  const restrictions: RiskRestriction[] = [
+    {
+      id: 'rr_zhang_lumbar', memberId: IDS.mZhang, coachId: IDS.coachSu,
+      source: '体验测评', assessmentId: 'as_zhang', createdAt: daysAgo(6),
+      bodyPart: '腰椎', level: '高风险',
+      pairs: [
+        { forbidden: '深度后弯（轮式）', alternative: '桥式（只抬臀不推胸）/ 低位眼镜蛇式', reason: '骨盆前倾、腰椎曲度偏大，深度后弯易挤压腰椎' },
+        { forbidden: '犁式 / 肩倒立', alternative: '倒箭式（靠墙抬腿，腰背贴地）', reason: '胸椎活动度不足，倒置时腰部代偿' },
+        { forbidden: '坐立前屈（直腿深屈）', alternative: '屈膝前屈（膝下垫毛毯）', reason: '腘绳肌紧张，直腿深屈使椎间盘压力升高' },
+      ],
+      equipment: ['瑜伽砖（2 块）', '伸展带', '抱枕', '墙壁（辅助支撑）'],
+      assists: ['教练旁侧保护，控制幅度', '减少停留时间，增加组间休息', '先激活目标肌群再进入体式'],
+      generalNotice: '腰椎慢性劳损期间避免深度后弯/倒置/直腿深屈；若出现下肢放射痛或麻木，立即停止并就医。课程不能替代医疗诊断。',
+      status: '生效中',
+    },
+    {
+      id: 'rr_wang_knee', memberId: IDS.mWang, coachId: IDS.coachLin,
+      source: '体验测评', assessmentId: 'as_wang', createdAt: daysAgo(46),
+      bodyPart: '右膝', level: '高风险',
+      pairs: [
+        { forbidden: '深度深蹲（屈膝>90°）', alternative: '靠墙浅蹲（屈膝<60°，膝不超脚尖）', reason: '髌股关节压力随屈膝角度显著上升，右膝疼痛反复' },
+        { forbidden: '跳跃串联（跳穿/波比）', alternative: '迈步替代跳跃，低冲击过渡', reason: '落地冲击为体重数倍，加重髂胫束与膝外侧负荷' },
+        { forbidden: '莲花式', alternative: '简易坐（坐骨下垫高）', reason: '膝外旋极限位，半月板与韧带负荷大' },
+        { forbidden: '战士一式（大幅度屈膝）', alternative: '高位弓步（小幅度，扶椅）', reason: '前膝易内扣且屈曲过深' },
+      ],
+      equipment: ['瑜伽椅', '墙壁（辅助支撑）', '泡沫轴', '弹力带（教练自备）'],
+      assists: ['关节中立位对线（膝对第二脚趾）', '教练旁侧保护，控制幅度', '先激活臀中肌再进入下肢体式'],
+      generalNotice: '右膝疼痛反复期间禁止跑跳冲击与深度屈膝；训练强度以次日无不适为上限，若出现肿胀、交锁请就诊运动医学科。',
+      status: '生效中',
+    },
+  ]
+
+  // ---------- 风险动作二次确认记录（会员坚持挑战高难体式时留痕） ----------
+  const riskConfirmations: RiskConfirmation[] = [
+    {
+      id: 'rcf_w1', memberId: IDS.mWang, coachId: IDS.coachLin, sessionId: 'ss_wang_5',
+      move: '战士一式（大幅度屈膝）', createdAt: daysAgo(17),
+      decision: '调整为替代方案', adjustedMove: '高位弓步（小幅度，扶瑜伽椅）',
+      note: '会员想尝试大幅度战士一，当场再次告知右膝风险后，会员接受调整为高位弓步，并约定疼痛降到 2 分内再逐步加大幅度。',
+      informed: true,
+    },
+    {
+      id: 'rcf_z1', memberId: IDS.mZhang, coachId: IDS.coachSu,
+      move: '深度后弯（轮式）', createdAt: daysAgo(6),
+      decision: '拒绝该动作',
+      note: '体验课上会员好奇想试轮式；告知腰椎风险后教练暂不安排该动作，以桥式替代，并写入门禁限制。',
+      informed: true,
+    },
+  ]
+
+  // ---------- 本周团课 ----------
+  const groupClasses: GroupClass[] = [
+    {
+      id: 'gc_liuzhou', name: '晚间力量流（团课）', coachId: IDS.coachZhou,
+      date: addDays(t, 3), time: '19:00-20:00', intensity: '高强度', capacity: 12,
+      moves: ['跳跃串联（跳穿/波比）', '战士一式（大幅度屈膝）', '深度后弯（轮式）', '平板支撑（长时间静态）'],
+      equipment: ['瑜伽垫'], note: '节奏快、跳跃多，适合有规律训练基础者',
+    },
+    {
+      id: 'gc_houwan', name: '流动脊柱 · 后弯主题（团课）', coachId: IDS.coachSu,
+      date: addDays(t, 2), time: '20:00-21:00', intensity: '中强度', capacity: 10,
+      moves: ['深度后弯（轮式）', '坐立前屈（直腿深屈）', '仰卧脊柱深度扭转'],
+      equipment: ['抱枕', '瑜伽砖（2 块）'], note: '脊柱主题，腰部不适者需谨慎',
+    },
+    {
+      id: 'gc_yinyoga', name: '舒缓阴瑜伽 · 脊柱保养（团课）', coachId: IDS.coachSu,
+      date: addDays(t, 4), time: '10:00-11:00', intensity: '低强度', capacity: 10,
+      moves: ['倒箭式（靠墙抬腿）', '屈膝温和扭转', '婴儿式', '猫牛式'],
+      equipment: ['抱枕', '瑜伽砖（2 块）', '墙壁（辅助支撑）'], note: '幅度温和，适合腰椎不适与初学者',
+    },
+    {
+      id: 'gc_ashtanga', name: '阿斯汤加进阶（团课）', coachId: IDS.coachZhou,
+      date: addDays(t, 5), time: '20:00-21:00', intensity: '高强度', capacity: 10,
+      moves: ['莲花式', '犁式 / 肩倒立', '头倒立 / 肘倒立', '跳跃串联（跳穿/波比）', '深度后弯（轮式）'],
+      equipment: ['瑜伽垫'], note: '高难体式密集，需教练评估后参加',
+    },
+    {
+      id: 'gc_relax', name: '基础拉伸与肩颈放松（团课）', coachId: IDS.coachLin,
+      date: addDays(t, 6), time: '10:00-11:00', intensity: '低强度', capacity: 12,
+      moves: ['猫牛式', '婴儿式', '倒箭式（靠墙抬腿）', '跪姿平板'],
+      equipment: ['抱枕', '毛毯（垫膝/垫腰）'], note: '零基础友好，课后放松减压',
+    },
+  ]
+
+  // ---------- 团课报名（含风险告知留痕） ----------
+  const groupBookings: GroupBooking[] = [
+    {
+      id: 'gb_zhang_yin', classId: 'gc_yinyoga', memberId: IDS.mZhang, consultantId: IDS.consultant,
+      createdAt: daysAgo(1), acknowledged: true,
+      advisory: '会员有腰椎高风险限制；已说明该团课为低强度脊柱保养、无禁忌体式，可参加，并提醒课上如腰部不适及时告知苏晴教练。',
+      status: '已报名',
+    },
+  ]
+
   // ---------- 统一训练时间线 ----------
   const timeline: TimelineEvent[] = [
     { id: 'tl_01', memberId: IDS.mWang, at: daysAgo(50), kind: '预约体验', actorRole: 'member', actorName: '王晓彤', title: '预约体验课', detail: '运动基础：规律运动；右膝疼痛 5 分；目标：康复舒缓、减脂塑形；预算 500-700 元/节。' },
@@ -262,9 +362,17 @@ export function buildSeed(): SeedState {
     { id: 'tl_16', memberId: IDS.mHe, at: daysAgo(3), kind: '投诉', actorRole: 'member', actorName: '何静', title: '提交投诉', detail: '晚间时段总是约满，希望增加排课选择。' },
     { id: 'tl_17', memberId: IDS.mHe, at: daysAgo(1), kind: '请假', actorRole: 'coach', actorName: '周远', title: '教练请假', detail: '周远教练周四请假，何静 ' + addDays(t, 4) + ' 19:00 课程待协调。' },
     { id: 'tl_18', memberId: IDS.mLi, at: daysAgo(1), kind: '预约体验', actorRole: 'member', actorName: '李敏', title: '预约体验课', detail: '偶尔运动；肩颈 4 分；目标：体态矫正、减压助眠；介意异性教练。' },
+    { id: 'tl_19', memberId: IDS.mZhang, at: daysAgo(6), kind: '风险限制', actorRole: 'coach', actorName: '苏晴', title: '标记腰椎风险动作限制', detail: '禁止：深度后弯（轮式）、犁式/肩倒立、坐立前屈（直腿深屈）；替代：桥式、倒箭式、屈膝前屈。备瑜伽砖/伸展带/抱枕，教练旁侧保护控制幅度。', professional: true },
+    { id: 'tl_20', memberId: IDS.mWang, at: daysAgo(46), kind: '风险限制', actorRole: 'coach', actorName: '林岚', title: '标记右膝风险动作限制', detail: '禁止：深度深蹲（>90°）、跳跃串联、莲花式、大幅度战士一；替代：靠墙浅蹲、迈步过渡、简易坐、高位弓步。备瑜伽椅/靠墙辅助，注意膝对第二脚趾。', professional: true },
+    { id: 'tl_21', memberId: IDS.mWang, at: daysAgo(17), kind: '风险确认', actorRole: 'coach', actorName: '林岚', title: '高难体式二次确认', detail: '会员尝试大幅度战士一，再次告知右膝风险后调整为高位弓步（扶瑜伽椅）；约定疼痛降到 2 分内再加幅度。', professional: true },
+    { id: 'tl_22', memberId: IDS.mZhang, at: daysAgo(6), kind: '风险确认', actorRole: 'coach', actorName: '苏晴', title: '高难体式二次确认', detail: '会员想试轮式，告知腰椎风险后暂不安排，以桥式替代，并写入风险动作限制。', professional: true },
+    { id: 'tl_23', memberId: IDS.mZhang, at: daysAgo(1), kind: '团课报名', actorRole: 'consultant', actorName: '陈曦', title: '团课报名风险告知', detail: '报名「舒缓阴瑜伽 · 脊柱保养（团课）」；前台核对腰椎风险限制，该课为低强度、无禁忌体式，已告知注意事项并建议低强度课程。' },
   ]
 
-  return { accounts, coaches, bookings, assessments, packages, plans, sessions, records, leaves, tickets, renewals, complaints, timeline }
+  return {
+    accounts, coaches, bookings, assessments, packages, plans, sessions, records, leaves,
+    tickets, renewals, complaints, restrictions, riskConfirmations, groupClasses, groupBookings, timeline,
+  }
 }
 
-export const SEED_VERSION = 3
+export const SEED_VERSION = 4

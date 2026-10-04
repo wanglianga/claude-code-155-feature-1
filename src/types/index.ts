@@ -54,6 +54,82 @@ export interface Assessment {
   coachSignedAt: string    // 教练签名确认时间（签名后内容锁定，顾问不可改）
 }
 
+// ---------------- 风险动作限制（教练在测评/复评时标记） ----------------
+// 一条限制 = 一个禁止的高风险体式 + 配套的替代体式；
+// 限制生效后：排课自动提醒其他教练避开、团课报名时前台收到预警、
+// 排课同时提醒教练准备替代器械与辅助动作。
+export interface RiskMovePair {
+  forbidden: string      // 禁止体式/动作，如 深度深蹲（屈膝>90°）
+  alternative: string    // 替代动作，如 靠墙浅蹲（屈膝<60°）
+  reason: string         // 为什么禁，如 右膝髌股关节负荷大
+}
+
+export type RiskLevel = '高风险' | '中风险'
+
+export interface RiskRestriction {
+  id: string
+  memberId: string
+  coachId: string          // 标记教练（专业责任人）
+  source: '体验测评' | '复评'
+  assessmentId?: string
+  createdAt: string
+  bodyPart: string         // 受限部位：腰椎/右膝/肩颈...
+  level: RiskLevel
+  pairs: RiskMovePair[]    // 禁止动作 ↔ 替代动作
+  equipment: string[]      // 替代器械：瑜伽砖/伸展带/抱枕/瑜伽椅/墙壁...
+  assists: string[]        // 辅助动作/手法建议
+  generalNotice: string    // 总体风险提示（医疗边界）
+  status: '生效中' | '已解除'
+  releasedAt?: string
+  releasedBy?: string
+  releaseNote?: string
+}
+
+// 会员坚持挑战高难度体式时，教练再次告知风险后的处理记录
+export type RiskDecision = '调整为替代方案' | '拒绝该动作' | '坚持完成（已告知风险）'
+
+export interface RiskConfirmation {
+  id: string
+  memberId: string
+  coachId: string
+  sessionId?: string
+  groupClassId?: string
+  move: string             // 会员想挑战的体式
+  createdAt: string
+  decision: RiskDecision
+  adjustedMove?: string    // 调整后的方案（decision=调整为替代方案 时）
+  note: string             // 沟通与处理说明
+  informed: boolean        // 是否已明确告知风险并确认会员知晓
+}
+
+// ---------------- 团课 ----------------
+export type ClassIntensity = '低强度' | '中强度' | '高强度'
+
+export interface GroupClass {
+  id: string
+  name: string             // 如「晚间力量流（团课）」
+  coachId: string
+  date: string             // YYYY-MM-DD
+  time: string
+  intensity: ClassIntensity
+  capacity: number
+  moves: string[]          // 本节团课涉及的高难度/常见体式（用于风险匹配）
+  equipment: string[]      // 需要会员使用的器械
+  note: string
+}
+
+export interface GroupBooking {
+  id: string
+  classId: string
+  memberId: string
+  consultantId: string     // 前台/顾问
+  createdAt: string
+  acknowledged: boolean    // 风险已告知，会员已知晓
+  advisory: string         // 前台建议（如建议改选低强度课程）
+  cancelReason?: string
+  status: '已报名' | '已取消'
+}
+
 // ---------------- 课包与排课 ----------------
 export interface CoursePackage {
   id: string
@@ -182,6 +258,7 @@ export type TimelineKind =
   | '预约体验' | '安排体验' | '体验测评' | '购课' | '排课'
   | '上课记录' | '请假' | '改期' | '不适上报' | '课程调整'
   | '更换教练' | '续费' | '投诉' | '工单处理'
+  | '风险限制' | '风险确认' | '限制解除' | '团课报名' | '团课退订'
 
 export interface TimelineEvent {
   id: string
