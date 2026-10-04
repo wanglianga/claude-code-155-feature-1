@@ -1,7 +1,8 @@
 import { defineStore } from 'pinia'
 import type {
   Account, Assessment, CoachProfile, Complaint, CoursePackage, ExperienceBooking,
-  LeaveRequest, PainChange, RenewalFollowUp, SchedulePlan, Session, SessionRecord,
+  GroupClass, LeaveRequest, MovementRestriction, PainChange, RenewalFollowUp,
+  RestrictionDraft, RiskAcknowledge, SchedulePlan, Session, SessionRecord,
   Ticket, TicketType, TimelineEvent, TimelineKind,
 } from '../types'
 import { buildSeed, SEED_VERSION, type SeedState } from '../data/seed'
@@ -10,6 +11,36 @@ import { addDays, daysBetween, nextWeekday, nowStr, today, uid, weekdayCn } from
 const KEY = `yoga_db_v${SEED_VERSION}`
 
 export interface WeekdaySlot { weekday: number; time: string }
+
+/** 团课报名风险评估结果 */
+export interface ClassRisk {
+  level: 'safe' | 'caution' | 'high'
+  restrictions: MovementRestriction[]
+  hits: { move: string; reason: string }[]   // 课程体式与禁止动作直接命中
+}
+
+/** 把一个动作字段拆成可比对的动作词（兼容「、，/」与括号备注） */
+function moveTokens(raw: string): string[] {
+  return raw.split(/[、,，/／\n]/).map(s => s.replace(/[（(].*?[)）]/g, '').trim()).filter(Boolean)
+}
+
+function tokenIncludes(a: string, b: string): boolean {
+  return a.length > 0 && b.length > 0 && (a.includes(b) || b.includes(a))
+}
+
+/** 判断课程体式是否命中禁止动作，返回命中明细 */
+export function matchForbidden(featuredMoves: string[], restrictions: MovementRestriction[]): { move: string; reason: string }[] {
+  const hits: { move: string; reason: string }[] = []
+  restrictions.forEach(r => {
+    const forbidden = r.forbiddenMoves.flatMap(moveTokens)
+    featuredMoves.flatMap(moveTokens).forEach(cMove => {
+      if (forbidden.some(f => tokenIncludes(f, cMove))) {
+        hits.push({ move: cMove, reason: `${r.bodyPart}受限：${r.reason}` })
+      }
+    })
+  })
+  return hits
+}
 
 export const useDataStore = defineStore('data', {
   state: (): SeedState => buildSeed(),
@@ -101,6 +132,72 @@ export const useDataStore = defineStore('data', {
         upcoming: ss.filter(x => x.status === '待上课').length,
       }
     },
+
+    // ---- 风险动作限制 ----
+    /** 会员当前生效中的风险动作限制（按更新时间倒序） */
+    activeRestrictions: (s) => (memberId: string): MovementRestriction[] =>
+      s.restrictions
+        .filter(r => r.memberId === memberId && r.status === '生效中')
+        .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)),
+
+    restrictionById: (s) => (id: string) => s.restrictions.find(r => r.id === id),
+
+    /** 会员是否存在任何生效中的风险限制（用于全局角标/提示） */
+    hasRiskRestriction(): (memberId: string) => boolean {
+      return (memberId) => this.activeRestrictions(memberId).length > 0
+    },
+
+    /** 会员的风险一句话摘要（部位 + 禁止动作数量），供列表/角标使用 */
+    riskSummary(): (memberId: string) => string {
+      return (memberId) => {
+        const rs = this.activeRestrictions(memberId)
+        if (!rs.length) return ''
+        return rs.map(r => `${r.bodyPart}受限（禁 ${r.forbiddenMoves.length} 项）`).join('；')
+      }
+    },
+
+    /** 会员风险确认记录（会员坚持挑战高难度体式的处置结论） */
+    riskAcksOf: (s) => (memberId: string) =>
+      s.riskAcks.filter(r => r.memberId === memberId).sort((a, b) => b.createdAt.localeCompare(a.createdAt)),
+
+    // ---- 团课 ----
+    upcomingGroupClasses: (s) => s.groupClasses
+      .filter(c => c.date >= today())
+      .sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time)),
+
+    classById: (s) => (id: string) => s.groupClasses.find(c => c.id === id),
+
+    memberGroupClasses: (s) => (memberId: string) =>
+      s.groupClasses.filter(c => c.enrolledMemberIds.includes(memberId)),
+
+    /**
+     * 前台报名前的风险评估：
+     * - high：课程体式直接命中禁止动作，或高强度课遇到风险限制
+     * - caution：会员有风险限制但课程未直接命中（中强度）
+     * - safe：无限制或限制与课程无冲突
+     */
+    classRiskFor(): (memberId: string, gc: GroupClass) => ClassRisk {
+      return (memberId, gc) => {
+        const restrictions = this.activeRestrictions(memberId)
+        const hits = matchForbidden(gc.featuredMoves, restrictions)
+        let level: ClassRisk['level'] = 'safe'
+        if (hits.length > 0 || (gc.intensity === '高强度' && restrictions.length > 0)) {
+          level = 'high'
+        } else if (restrictions.length > 0) {
+          level = 'caution'
+        }
+        return { level, restrictions, hits }
+      }
+    },
+
+    /** 给会员推荐的低强度替代团课（排除已报名与有冲突的课程） */
+    lowIntensityAlternatives(): (memberId: string, excludeClassId: string) => GroupClass[] {
+      return (memberId, excludeClassId) =>
+        this.upcomingGroupClasses
+          .filter(c => c.id !== excludeClassId && c.intensity === '低强度')
+          .filter(c => !c.enrolledMemberIds.includes(memberId))
+          .filter(c => this.classRiskFor(memberId, c).level !== 'high')
+    },
   },
 
   actions: {
@@ -157,17 +254,108 @@ export const useDataStore = defineStore('data', {
     },
 
     // ---------- 教练：填写体验测评（签名后锁定，顾问只读） ----------
-    submitAssessment(bookingId: string, coachId: string, payload: { posture: string; movementLimits: string; courseAdvice: string; riskNotice: string; recommendedPackage: string }) {
+    submitAssessment(bookingId: string, coachId: string, payload: { posture: string; movementLimits: string; courseAdvice: string; riskNotice: string; recommendedPackage: string }, restrictions: RestrictionDraft[] = []) {
       const b = this.bookings.find(x => x.id === bookingId)
       if (!b) return
       b.status = '已完成测评'
       const coach = this.coachById(coachId)
+      const assessmentId = uid('as')
       this.assessments.push({
-        id: uid('as'), bookingId, memberId: b.memberId, coachId, createdAt: nowStr(),
+        id: assessmentId, bookingId, memberId: b.memberId, coachId, createdAt: nowStr(),
         ...payload, coachSignedAt: nowStr(),
       })
       this.log(b.memberId, '体验测评', 'coach', coach?.name ?? '', '完成体验课测评',
         `${payload.posture.slice(0, 60)}…；建议：${payload.recommendedPackage}；风险提示已签署。`, true)
+      // 同步落地结构化的风险动作限制（后续排课 / 团课报名据此自动提醒）
+      restrictions
+        .filter(d => d.bodyPart.trim() && d.forbiddenMoves.length)
+        .forEach(d => this.markRestriction(b.memberId, coachId, d, '体验测评', coach?.name ?? '', { assessmentId }))
+      this.persist()
+    },
+
+    // ---------- 教练：标记 / 更新风险动作限制（测评页与会员档案共用） ----------
+    markRestriction(memberId: string, coachId: string, draft: RestrictionDraft, source: MovementRestriction['source'], coachName: string, ref: { assessmentId?: string; sessionId?: string } = {}) {
+      const now = nowStr()
+      const r: MovementRestriction = {
+        id: uid('rs'), memberId, coachId,
+        bodyPart: draft.bodyPart.trim(),
+        forbiddenMoves: draft.forbiddenMoves,
+        alternativeMoves: draft.alternativeMoves,
+        alternativeEquipment: draft.alternativeEquipment,
+        assistActions: draft.assistActions,
+        reason: draft.reason.trim(),
+        source, assessmentId: ref.assessmentId, sessionId: ref.sessionId,
+        status: '生效中', createdAt: now, updatedAt: now,
+      }
+      this.restrictions.push(r)
+      this.log(memberId, '风险限制', 'coach', coachName,
+        `标记${r.bodyPart}风险动作限制`,
+        `禁止：${r.forbiddenMoves.join('、')}；替代：${r.alternativeMoves.join('、') || '待补充'}`
+        + `；替代器械：${r.alternativeEquipment.join('、') || '无'}；辅助：${r.assistActions.join('、') || '无'}`
+        + `。原因：${r.reason || '—'}。后续排课与团课报名将自动提醒避开。`, true)
+      this.persist()
+      return r
+    },
+
+    /** 解除一条风险限制（会员恢复后由教练操作，保留历史记录） */
+    releaseRestriction(restrictionId: string, coachName: string, note: string) {
+      const r = this.restrictions.find(x => x.id === restrictionId)
+      if (!r || r.status !== '生效中') return
+      r.status = '已解除'
+      r.updatedAt = nowStr()
+      this.log(r.memberId, '风险限制', 'coach', coachName, `解除${r.bodyPart}动作限制`,
+        `原限制（禁止 ${r.forbiddenMoves.join('、')}）已解除。说明：${note || '会员已恢复，复测无不适。'}`, true)
+      this.persist()
+    },
+
+    // ---------- 教练：会员坚持高难度体式时的风险二次确认 ----------
+    recordRiskAck(input: { memberId: string; coachId: string; sessionId?: string; requestedMove: string; bodyPart: string; decision: RiskAcknowledge['decision']; plan: string; memberInformed: boolean; coachWitness: string }, coachName: string) {
+      const ack: RiskAcknowledge = { id: uid('ra'), createdAt: nowStr(), ...input }
+      this.riskAcks.push(ack)
+      const decisionText = { 已拒绝: '已拒绝该体式', 已降阶调整: '已降阶调整', 知情同意后挑战: '知情同意后谨慎挑战' }[ack.decision]
+      this.log(ack.memberId, '风险确认', 'coach', coachName, '高难度体式风险二次确认',
+        `会员坚持挑战「${ack.requestedMove}」（涉及${ack.bodyPart}）；已再次告知风险：${ack.memberInformed ? '是' : '否'}；结论：${decisionText}；方案：${ack.plan}；确认教练：${ack.coachWitness}。`, true)
+      this.persist()
+      return ack
+    },
+
+    // ---------- 前台：团课报名（读取风险动作限制，提醒低强度替代） ----------
+    enrollGroupClass(classId: string, memberId: string, actorName: string) {
+      const gc = this.groupClasses.find(c => c.id === classId)
+      if (!gc) return { ok: false, reason: '团课不存在' }
+      if (gc.enrolledMemberIds.includes(memberId)) return { ok: false, reason: '已报名该课程' }
+      if (gc.enrolledMemberIds.length >= gc.capacity) return { ok: false, reason: '该团课名额已满' }
+      const risk = this.classRiskFor(memberId, gc)
+      if (risk.level === 'high') {
+        return { ok: false, reason: '风险拦截', risk }
+      }
+      gc.enrolledMemberIds.push(memberId)
+      const detail = risk.level === 'caution'
+        ? `报名「${gc.name}」（${gc.intensity}）；存在${risk.restrictions.map(r => r.bodyPart).join('、')}动作限制，已提示课中避开相关体式并使用替代动作。`
+        : `报名「${gc.name}」（${gc.intensity}）；已核对风险动作限制，无冲突。`
+      this.log(memberId, '团课报名', 'consultant', actorName, '前台报名团课', detail)
+      this.persist()
+      return { ok: true, risk }
+    },
+
+    /** 高风险团课：前台再次告知并经会员知情后登记（保留风险确认留痕） */
+    enrollGroupClassOverride(classId: string, memberId: string, actorName: string, informedNote: string) {
+      const gc = this.groupClasses.find(c => c.id === classId)
+      if (!gc || gc.enrolledMemberIds.includes(memberId) || gc.enrolledMemberIds.length >= gc.capacity) return
+      const risk = this.classRiskFor(memberId, gc)
+      gc.enrolledMemberIds.push(memberId)
+      this.log(memberId, '团课报名', 'consultant', actorName, '高风险团课知情报名',
+        `课程「${gc.name}」与动作限制冲突（${risk.hits.map(h => h.move).join('、') || risk.restrictions.map(r => r.bodyPart + '受限').join('、')}）；前台已再次提示风险并建议低强度课，会员仍坚持参加，已签署知情登记：${informedNote}。`)
+      this.persist()
+    },
+
+    cancelGroupClassEnrollment(classId: string, memberId: string, actorName: string) {
+      const gc = this.groupClasses.find(c => c.id === classId)
+      if (!gc) return
+      const i = gc.enrolledMemberIds.indexOf(memberId)
+      if (i < 0) return
+      gc.enrolledMemberIds.splice(i, 1)
+      this.log(memberId, '团课报名', 'consultant', actorName, '取消团课报名', `取消「${gc.name}」。`)
       this.persist()
     },
 

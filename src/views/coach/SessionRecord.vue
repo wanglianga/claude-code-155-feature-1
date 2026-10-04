@@ -3,8 +3,9 @@ import { computed, reactive, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useAuthStore } from '../../stores/auth'
 import { useDataStore } from '../../stores/data'
-import type { PainChange } from '../../types'
+import type { PainChange, RiskAcknowledge } from '../../types'
 import { weekdayCn } from '../../utils/date'
+import RiskRestrictionCard from '../../components/RiskRestrictionCard.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -19,6 +20,10 @@ const lastRecord = computed(() => {
   return data.recordsOf(session.value.memberId).find(r => r.sessionId !== session.value!.id)
 })
 const existingRecord = computed(() => session.value ? data.recordOf(session.value.id) : undefined)
+
+// ---- 风险动作限制（排课/课前自动提醒） ----
+const restrictions = computed(() => session.value ? data.activeRestrictions(session.value.memberId) : [])
+const riskHistory = computed(() => session.value ? data.riskAcksOf(session.value.memberId) : [])
 
 const form = reactive({
   movesText: '',
@@ -57,6 +62,48 @@ function submit() {
     router.push('/coach')
   }
 }
+
+// ---- 会员坚持挑战高难度（被限制）体式：再次告知风险并记录处置 ----
+const showAck = ref(false)
+const ack = reactive({
+  requestedMove: '',
+  bodyPart: '',
+  decision: '已降阶调整' as RiskAcknowledge['decision'],
+  plan: '',
+  memberInformed: true,
+})
+const ackMsg = ref('')
+
+function openAck() {
+  ack.requestedMove = restrictions.value[0]?.forbiddenMoves[0] ?? ''
+  ack.bodyPart = restrictions.value[0]?.bodyPart ?? ''
+  ack.decision = '已降阶调整'
+  ack.plan = ''
+  ack.memberInformed = true
+  showAck.value = true
+}
+
+function submitAck() {
+  const s = session.value
+  if (!s) return
+  if (!ack.requestedMove.trim()) { alert('请填写会员坚持挑战的体式'); return }
+  if (!ack.bodyPart.trim()) { alert('请选择涉及的受限部位'); return }
+  if (!ack.memberInformed) { alert('请先再次向会员告知风险后再记录'); return }
+  if (!ack.plan.trim()) { alert('请填写拒绝理由或降阶/保护方案'); return }
+  data.recordRiskAck({
+    memberId: s.memberId, coachId: auth.current!.id, sessionId: s.id,
+    requestedMove: ack.requestedMove.trim(), bodyPart: ack.bodyPart.trim(),
+    decision: ack.decision, plan: ack.plan.trim(), memberInformed: ack.memberInformed,
+    coachWitness: auth.current!.name,
+  }, auth.current!.name)
+  showAck.value = false
+  ackMsg.value = '已记录风险二次确认与处置结论'
+  setTimeout(() => (ackMsg.value = ''), 2500)
+}
+
+const decisionClass: Record<RiskAcknowledge['decision'], string> = {
+  已拒绝: 'gray', 已降阶调整: 'amber', 知情同意后挑战: 'danger',
+}
 </script>
 
 <template>
@@ -66,6 +113,12 @@ function submit() {
       <span class="tag" :class="session.isExperience ? 'clay' : ''">{{ session.kind }}</span>
     </h2>
     <p class="page-sub">{{ session.date }}（{{ weekdayCn(session.date) }}）{{ session.time }} · 本节课重点：{{ session.focus }}</p>
+
+    <div v-if="ackMsg" class="banner warn">{{ ackMsg }}</div>
+
+    <!-- 排课/课前自动提醒：风险动作限制 + 替代器械与辅助动作 -->
+    <RiskRestrictionCard v-if="restrictions.length && session.status === '待上课'" :member-id="session.memberId"
+      title="课前风险提醒 · 请提前备好替代器械并避开高风险体式" />
 
     <div class="grid cols-2">
       <div class="card">
@@ -140,6 +193,74 @@ function submit() {
         <p class="muted">该课程未正常进行，无需填写课后记录。</p>
       </div>
     </div>
+
+    <!-- 会员坚持挑战高难度体式：教练再次确认风险并记录拒绝/调整方案 -->
+    <div v-if="restrictions.length && session.status === '待上课'" class="card risk-ack">
+      <div class="between">
+        <h3 style="margin: 0">会员坚持挑战高难度体式？</h3>
+        <button v-if="!showAck" class="small danger" @click="openAck">再次告知风险并记录</button>
+      </div>
+      <p class="muted">若会员希望尝试被限制的体式，教练须 <b>再次当面告知风险</b>，并将「拒绝 / 降阶调整 / 知情同意后谨慎挑战」的处置方案留痕。</p>
+
+      <div v-if="showAck" class="ack-form">
+        <div class="grid cols-2">
+          <div class="form-row">
+            <label>会员坚持挑战的体式 *</label>
+            <input v-model="ack.requestedMove" placeholder="如：轮式 / 深度深蹲" />
+            <select v-model="ack.requestedMove" style="margin-top: 6px">
+              <option value="" disabled>或从禁止动作中选择</option>
+              <option v-for="m in restrictions.flatMap(r => r.forbiddenMoves)" :key="m" :value="m">{{ m }}</option>
+            </select>
+          </div>
+          <div class="form-row">
+            <label>涉及受限部位 *</label>
+            <select v-model="ack.bodyPart">
+              <option v-for="r in restrictions" :key="r.id" :value="r.bodyPart">{{ r.bodyPart }}</option>
+            </select>
+          </div>
+        </div>
+        <div class="form-row">
+          <label>处置结论 *</label>
+          <div class="checks">
+            <label v-for="d in (['已拒绝','已降阶调整','知情同意后挑战'] as const)" :key="d" :class="{ on: ack.decision === d }">
+              <input type="radio" :value="d" v-model="ack.decision" />{{ d }}
+            </label>
+          </div>
+        </div>
+        <div class="form-row">
+          <label>拒绝理由 / 降阶与保护方案 *</label>
+          <textarea v-model="ack.plan" :placeholder="ack.decision === '已拒绝'
+            ? '如：该体式需腰椎深度后弯，当前骨盆前倾未改善，本次拒绝，建议 8 周后复测。'
+            : '如：降阶为抱枕支撑桥式，腰下卷毛毯，教练旁侧保护，仅做胸椎段后弯。'"></textarea>
+        </div>
+        <label class="confirm-line">
+          <input type="checkbox" v-model="ack.memberInformed" style="width: auto" />
+          我已当面向会员再次告知该体式对{{ ack.bodyPart || '受限部位' }}的风险
+        </label>
+        <div class="row mt8">
+          <button class="warn" @click="submitAck">保存风险确认记录</button>
+          <button class="ghost" @click="showAck = false">取消</button>
+        </div>
+      </div>
+
+      <div v-if="riskHistory.length" class="mt16">
+        <div class="muted" style="margin-bottom: 6px">历史风险确认记录</div>
+        <div v-for="a in riskHistory" :key="a.id" class="ack-history">
+          <div class="between">
+            <b>「{{ a.requestedMove }}」</b>
+            <span><span class="tag" :class="decisionClass[a.decision]">{{ a.decision }}</span><span class="muted">{{ a.createdAt }} · {{ a.coachWitness }}</span></span>
+          </div>
+          <div class="muted" style="font-size: 13px">{{ a.bodyPart }} · {{ a.plan }}</div>
+        </div>
+      </div>
+    </div>
   </div>
   <div v-else class="page"><div class="empty">课程不存在</div></div>
 </template>
+
+<style scoped>
+.risk-ack { border-color: #ecc9be; }
+.ack-form { border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; margin-top: 10px; background: #fff; }
+.confirm-line { display: flex; align-items: center; gap: 8px; font-size: 14px; color: var(--ink); }
+.ack-history { border-bottom: 1px dashed var(--line); padding: 8px 0; font-size: 14px; }
+</style>

@@ -1,6 +1,7 @@
 import type {
   Account, Assessment, CoachProfile, Complaint, CoursePackage, ExperienceBooking,
-  LeaveRequest, RenewalFollowUp, SchedulePlan, Session, SessionRecord, Ticket, TimelineEvent,
+  GroupClass, LeaveRequest, MovementRestriction, RenewalFollowUp, RiskAcknowledge,
+  SchedulePlan, Session, SessionRecord, Ticket, TimelineEvent,
 } from '../types'
 import { addDays, daysAgo, nowStr, today, weekdayCn } from '../utils/date'
 
@@ -17,6 +18,9 @@ export interface SeedState {
   tickets: Ticket[]
   renewals: RenewalFollowUp[]
   complaints: Complaint[]
+  restrictions: MovementRestriction[]
+  riskAcks: RiskAcknowledge[]
+  groupClasses: GroupClass[]
   timeline: TimelineEvent[]
 }
 
@@ -242,6 +246,84 @@ export function buildSeed(): SeedState {
     { id: 'cp_he', memberId: IDS.mHe, content: '最近两周想约的晚间时段总是约满，希望增加排课选择。', createdAt: daysAgo(3), status: '待处理', reply: '' },
   ]
 
+  // ---------- 风险动作限制（教练标记，全队/前台共享） ----------
+  const restrictions: MovementRestriction[] = [
+    {
+      id: 'r_zhang', memberId: IDS.mZhang, coachId: IDS.coachSu,
+      bodyPart: '腰椎',
+      forbiddenMoves: ['轮式（深度后弯）', '犁式', '长时间坐立前屈', '站立深度前屈触地', '高强度跳跃串联'],
+      alternativeMoves: ['婴儿式', '猫牛式', '仰卧脊柱扭转', '抱枕支撑桥式', '靠墙倒箭式'],
+      alternativeEquipment: ['瑜伽抱枕', '瑜伽砖 ×2', '瑜伽毯'],
+      assistActions: ['腰下卷毛毯支撑保持生理曲度', '前屈时屈膝、手下垫砖', '后弯只做到胸椎段、腰部不离地'],
+      reason: '体验课前屈与后仰测试中腰椎酸胀 4/10，久坐后腰酸；骨盆轻度前倾、腰曲偏大。',
+      source: '体验测评', assessmentId: 'as_zhang',
+      status: '生效中', createdAt: daysAgo(6), updatedAt: daysAgo(6),
+    },
+    {
+      id: 'r_wang', memberId: IDS.mWang, coachId: IDS.coachLin,
+      bodyPart: '右膝',
+      forbiddenMoves: ['跑跳 / 波比跳', '深度屈膝（>90°）静蹲', '莲花式', '英雄卧', '连续跳跃战士式'],
+      alternativeMoves: ['靠墙浅蹲（≤60°）', '直腿抬高', '椭圆机低阻', '蚌式开合', '弹力带侧走'],
+      alternativeEquipment: ['弹力带', '泡沫轴', '平衡垫', '瑜伽砖（手撑辅助）'],
+      assistActions: ['下蹲时手撑墙、膝盖对准第二脚趾', '单腿动作旁侧保护防内扣', '离心下放时语言提示减速'],
+      reason: '第 6 节课强度加急后第二天右膝外侧疼痛回到 5/10，上下楼明显；暂停屈膝负重。',
+      source: '课程调整', sessionId: 'ss_wang_6',
+      status: '生效中', createdAt: daysAgo(9), updatedAt: daysAgo(8),
+    },
+  ]
+
+  // ---------- 高难度体式风险二次确认记录 ----------
+  const riskAcks: RiskAcknowledge[] = [
+    {
+      id: 'ra_wang_1', memberId: IDS.mWang, coachId: IDS.coachLin, sessionId: 'ss_wang_5',
+      requestedMove: '深度深蹲（大腿低于水平）',
+      bodyPart: '右膝',
+      decision: '已降阶调整',
+      plan: '会员希望加强腿部围度，再次告知屈膝 >90° 会刺激右膝髌股关节；经沟通改为靠墙静蹲 60°×40s + 弹力带膝对齐辅助，课后疼痛未加重。',
+      memberInformed: true, coachWitness: '林岚',
+      createdAt: daysAgo(17),
+    },
+  ]
+
+  // ---------- 团课（前台报名时读取风险动作限制） ----------
+  const groupClasses: GroupClass[] = [
+    {
+      id: 'gc_yin_spine', name: '脊柱养护 · 阴瑜伽', coachId: IDS.coachSu,
+      date: addDays(t, 1), time: '10:00-11:00', intensity: '低强度', capacity: 12,
+      enrolledMemberIds: [],
+      featuredMoves: ['猫牛式', '婴儿式', '仰卧脊柱扭转', '抱枕支撑桥式'],
+      note: '动作温和、全程辅具支撑，适合腰背不适与零基础会员。',
+    },
+    {
+      id: 'gc_power_burn', name: '力量流 · 燃脂进阶', coachId: IDS.coachZhou,
+      date: addDays(t, 2), time: '20:00-21:00', intensity: '高强度', capacity: 10,
+      enrolledMemberIds: [IDS.mZhao],
+      featuredMoves: ['波比跳', '力量流串联', '平板支撑', '跳跃战士式'],
+      note: '含跑跳与连续流，强度高，需规律运动基础；膝/腰不适会员不建议参加。',
+    },
+    {
+      id: 'gc_yin_sleep', name: '舒缓阴瑜伽 · 减压助眠', coachId: IDS.coachSu,
+      date: addDays(t, 3), time: '20:00-21:00', intensity: '低强度', capacity: 14,
+      enrolledMemberIds: [IDS.mZhang],
+      featuredMoves: ['抱枕支撑坐角式', '仰卧脊柱扭转', '靠墙倒箭式', '婴儿式'],
+      note: '地面动作为主，低强度，适合所有会员。',
+    },
+    {
+      id: 'gc_core_flow', name: '核心塑形 · 流瑜伽', coachId: IDS.coachZhou,
+      date: addDays(t, 4), time: '19:00-20:00', intensity: '中强度', capacity: 12,
+      enrolledMemberIds: [IDS.mHe],
+      featuredMoves: ['板式', '战士序列', '登山跑', '连续流串联'],
+      note: '含连续流与少量跳跃，腰/膝不适者请先咨询教练。',
+    },
+    {
+      id: 'gc_backbend', name: '阿斯汤加 · 后弯工作坊', coachId: IDS.coachZhou,
+      date: addDays(t, 6), time: '14:00-15:30', intensity: '高强度', capacity: 8,
+      enrolledMemberIds: [],
+      featuredMoves: ['轮式', '犁式', '站立深度后弯', '头倒立'],
+      note: '高难度后弯与倒置体式，对脊柱与肩腕要求高，仅限进阶会员。',
+    },
+  ]
+
   // ---------- 统一训练时间线 ----------
   const timeline: TimelineEvent[] = [
     { id: 'tl_01', memberId: IDS.mWang, at: daysAgo(50), kind: '预约体验', actorRole: 'member', actorName: '王晓彤', title: '预约体验课', detail: '运动基础：规律运动；右膝疼痛 5 分；目标：康复舒缓、减脂塑形；预算 500-700 元/节。' },
@@ -262,9 +344,13 @@ export function buildSeed(): SeedState {
     { id: 'tl_16', memberId: IDS.mHe, at: daysAgo(3), kind: '投诉', actorRole: 'member', actorName: '何静', title: '提交投诉', detail: '晚间时段总是约满，希望增加排课选择。' },
     { id: 'tl_17', memberId: IDS.mHe, at: daysAgo(1), kind: '请假', actorRole: 'coach', actorName: '周远', title: '教练请假', detail: '周远教练周四请假，何静 ' + addDays(t, 4) + ' 19:00 课程待协调。' },
     { id: 'tl_18', memberId: IDS.mLi, at: daysAgo(1), kind: '预约体验', actorRole: 'member', actorName: '李敏', title: '预约体验课', detail: '偶尔运动；肩颈 4 分；目标：体态矫正、减压助眠；介意异性教练。' },
+    { id: 'tl_19', memberId: IDS.mZhang, at: daysAgo(6), kind: '风险限制', actorRole: 'coach', actorName: '苏晴', title: '标记腰椎风险动作限制', detail: '禁止：轮式、犁式、长时间坐立前屈等；替代：婴儿式、猫牛式、抱枕支撑桥式等；备抱枕/砖/毯，腰部卷毛毯支撑。后续排课与团课报名自动提醒。', professional: true },
+    { id: 'tl_20', memberId: IDS.mWang, at: daysAgo(9), kind: '风险限制', actorRole: 'coach', actorName: '林岚', title: '更新右膝风险动作限制', detail: '禁止跑跳与深度屈膝（>90°）、莲花式、英雄卧；替代浅蹲/直腿抬高/椭圆机；备弹力带、泡沫轴、平衡垫。', professional: true },
+    { id: 'tl_21', memberId: IDS.mWang, at: daysAgo(17), kind: '风险确认', actorRole: 'coach', actorName: '林岚', title: '高难度体式风险二次确认', detail: '会员坚持挑战深度深蹲，已再次告知右膝风险，处理结论：已降阶调整为靠墙静蹲 60° + 弹力带膝对齐辅助。', professional: true },
+    { id: 'tl_22', memberId: IDS.mZhang, at: daysAgo(1), kind: '团课报名', actorRole: 'consultant', actorName: '陈曦', title: '前台报名团课', detail: '报名「舒缓阴瑜伽 · 减压助眠」（低强度）；前台已核对腰椎风险限制，课程体式均为允许/替代动作，已提示带瑜伽毯。' },
   ]
 
-  return { accounts, coaches, bookings, assessments, packages, plans, sessions, records, leaves, tickets, renewals, complaints, timeline }
+  return { accounts, coaches, bookings, assessments, packages, plans, sessions, records, leaves, tickets, renewals, complaints, restrictions, riskAcks, groupClasses, timeline }
 }
 
-export const SEED_VERSION = 3
+export const SEED_VERSION = 4

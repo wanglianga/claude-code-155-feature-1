@@ -5,6 +5,7 @@ import { useAuthStore } from '../../stores/auth'
 import { useDataStore } from '../../stores/data'
 import { addDays, fmt, today, WEEKDAY_CN } from '../../utils/date'
 import type { Session } from '../../types'
+import RiskRestrictionCard from '../../components/RiskRestrictionCard.vue'
 
 const auth = useAuthStore()
 const data = useDataStore()
@@ -31,6 +32,15 @@ function sessionsOn(date: string): Session[] {
   return mySessions.value.filter(s => s.date === date)
 }
 
+function restrictionsOf(memberId: string) {
+  return data.activeRestrictions(memberId)
+}
+
+/** 该会员待上课需提前准备的替代器械（去重） */
+function prepOf(memberId: string): string[] {
+  return [...new Set(restrictionsOf(memberId).flatMap(r => r.alternativeEquipment))]
+}
+
 // 我的会员（有进行中课包或体验课待测评）
 const myMembers = computed(() => {
   const ids = new Set<string>()
@@ -41,8 +51,19 @@ const myMembers = computed(() => {
     const last = recs[0]
     const next = data.upcomingSessions(id).find(s => s.coachId === coachId)
     const booking = data.bookingOf(id)
-    return { id, name: data.nameOf(id), pkg, last, next, goals: booking?.goals ?? [], prog: pkg ? data.progressOf(pkg) : null }
+    return { id, name: data.nameOf(id), pkg, last, next, goals: booking?.goals ?? [], prog: pkg ? data.progressOf(pkg) : null, risk: data.activeRestrictions(id) }
   })
+})
+
+// 全队共享：所有生效中的风险动作限制（含非本教练会员）——换教练/代课时据此避开高风险体式
+const allActiveRisks = computed(() => {
+  const ids = new Set(data.restrictions.filter(r => r.status === '生效中').map(r => r.memberId))
+  return [...ids].map(id => ({
+    memberId: id,
+    name: data.nameOf(id),
+    restrictions: data.activeRestrictions(id),
+    mine: !!mySessions.value.find(s => s.memberId === id),
+  }))
 })
 
 function openSession(s: Session) {
@@ -83,10 +104,16 @@ const statusClass: Record<string, string> = { 待上课: '', 已完成: 'off', �
           <span>{{ WEEKDAY_CN[new Date(d + 'T00:00:00').getDay()] }}</span>
           <span>{{ d.slice(5) }}</span>
         </div>
-        <div v-for="s in sessionsOn(d)" :key="s.id" class="session-chip" :class="[statusClass[s.status], { exp: s.isExperience }]" @click="openSession(s)">
+        <div v-for="s in sessionsOn(d)" :key="s.id" class="session-chip" :class="[statusClass[s.status], { exp: s.isExperience, risky: s.status === '待上课' && restrictionsOf(s.memberId).length }]" @click="openSession(s)">
           <div class="who">{{ s.time.slice(0, 5) }} {{ data.nameOf(s.memberId) }}</div>
           <div>{{ s.kind }} · {{ s.status }}</div>
           <div style="color: var(--muted)">{{ s.focus }}</div>
+          <div v-if="s.status === '待上课' && restrictionsOf(s.memberId).length" class="risk-line">
+            ⚠️ {{ restrictionsOf(s.memberId).map(r => r.bodyPart).join('、') }}受限 · 避开高风险体式
+          </div>
+          <div v-if="s.status === '待上课' && prepOf(s.memberId).length" class="prep-line">
+            🧰 备：{{ prepOf(s.memberId).join('、') }}
+          </div>
           <div v-if="s.status === '待上课'" class="mt8">
             <button class="small ghost" @click.stop="coachLeave(s)">请假</button>
           </div>
@@ -95,11 +122,31 @@ const statusClass: Record<string, string> = { 待上课: '', 已完成: 'off', �
       </div>
     </div>
 
+    <!-- 全队风险动作限制：其他教练/代课都要据此避开高风险体式 -->
+    <div v-if="allActiveRisks.length" class="card mt16 risk-team">
+      <div class="between">
+        <h3 style="margin: 0">⚠️ 会员运动风险动作限制（全队共享 · 排课/代课自动生效）</h3>
+        <span class="tag danger">{{ allActiveRisks.length }} 名会员受限</span>
+      </div>
+      <p class="muted">以下限制由各教练在测评页或课程调整中标记；无论由谁代课，排课时都应避开高风险体式、提前备好替代器械。</p>
+      <div class="risk-list">
+        <div v-for="m in allActiveRisks" :key="m.memberId" class="risk-member">
+          <div class="between">
+            <b>{{ m.name }}</b>
+            <span v-if="m.mine" class="tag">我的会员</span>
+            <span v-else class="tag gray">其他教练会员</span>
+          </div>
+          <RiskRestrictionCard :member-id="m.memberId" variant="compact" title="" />
+          <router-link :to="`/coach/member/${m.memberId}`"><button class="small ghost">查看完整替代方案</button></router-link>
+        </div>
+      </div>
+    </div>
+
     <div class="card mt16">
       <h3>我的会员（目标 / 上节课反馈 / 本节课重点）</h3>
       <table class="plain">
         <thead>
-          <tr><th>会员</th><th>课包进度</th><th>训练目标</th><th>上节课反馈</th><th>本节课重点</th><th></th></tr>
+          <tr><th>会员</th><th>课包进度</th><th>风险限制</th><th>训练目标</th><th>上节课反馈</th><th>本节课重点</th><th></th></tr>
         </thead>
         <tbody>
           <tr v-for="m in myMembers" :key="m.id">
@@ -111,6 +158,12 @@ const statusClass: Record<string, string> = { 待上课: '', 已完成: 'off', �
                 <span v-if="m.prog.expiringSoon" class="tag danger">将到期</span>
               </template>
               <span v-else class="tag clay">体验课</span>
+            </td>
+            <td>
+              <span v-if="m.risk.length">
+                <span v-for="r in m.risk" :key="r.id" class="tag danger">⚠️ {{ r.bodyPart }}</span>
+              </span>
+              <span v-else class="muted">—</span>
             </td>
             <td>{{ m.goals.join('、') || '—' }}</td>
             <td style="max-width: 240px">
@@ -129,3 +182,13 @@ const statusClass: Record<string, string> = { 待上课: '', 已完成: 'off', �
     </div>
   </div>
 </template>
+
+<style scoped>
+.session-chip.risky { background: var(--danger-soft); border: 1px solid #ecc9be; }
+.risk-line { color: var(--danger); font-weight: 600; font-size: 12px; margin-top: 3px; }
+.prep-line { color: var(--amber); font-size: 12px; margin-top: 2px; }
+.risk-team { border-color: #ecc9be; }
+.risk-list { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; }
+@media (max-width: 860px) { .risk-list { grid-template-columns: 1fr; } }
+.risk-member { border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px; background: #fff; }
+</style>

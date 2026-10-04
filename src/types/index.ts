@@ -54,6 +54,53 @@ export interface Assessment {
   coachSignedAt: string    // 教练签名确认时间（签名后内容锁定，顾问不可改）
 }
 
+// ---------------- 风险动作限制（教练在测评页 / 课程调整中标记，全队共享） ----------------
+// 会员在体验课或训练中出现某部位不适（如腰椎、膝盖），教练标记禁止动作与替代动作；
+// 限制在会员维度生效：后续任何教练排课、前台报团课都会读取同一份限制。
+
+export interface MovementRestriction {
+  id: string
+  memberId: string
+  coachId: string            // 标记教练（创建者；其他教练同样可见并据此避开）
+  bodyPart: string           // 不适/受限部位，如 腰椎 / 右膝
+  forbiddenMoves: string[]   // 禁止动作（高风险体式）
+  alternativeMoves: string[] // 替代动作（低风险/降阶体式）
+  alternativeEquipment: string[] // 替代器械（排课时提醒教练提前准备）
+  assistActions: string[]    // 辅助动作（保护与手法辅助）
+  reason: string             // 标记原因，如「体验课中前屈时腰椎酸胀 5/10」
+  source: '体验测评' | '课程调整'
+  assessmentId?: string
+  sessionId?: string
+  status: '生效中' | '已解除'
+  createdAt: string
+  updatedAt: string
+}
+
+// 教练提交测评 / 课程调整时携带的限制草稿（字段由表单文本拆分而来）
+export interface RestrictionDraft {
+  bodyPart: string
+  forbiddenMoves: string[]
+  alternativeMoves: string[]
+  alternativeEquipment: string[]
+  assistActions: string[]
+  reason: string
+}
+
+// 会员坚持挑战高难度（被限制）体式时，教练再次告知风险并记录的处置结论
+export interface RiskAcknowledge {
+  id: string
+  memberId: string
+  coachId: string
+  sessionId?: string
+  requestedMove: string       // 会员坚持要做的高难度体式
+  bodyPart: string            // 涉及的受限部位
+  decision: '已拒绝' | '已降阶调整' | '知情同意后挑战'
+  plan: string                // 拒绝理由 / 降阶与保护方案 / 知情同意下的保护措施
+  memberInformed: boolean     // 是否已再次向会员告知风险
+  coachWitness: string        // 在场确认教练签名（姓名）
+  createdAt: string
+}
+
 // ---------------- 课包与排课 ----------------
 export interface CoursePackage {
   id: string
@@ -100,6 +147,22 @@ export interface Session {
   focus: string            // 本节课重点（教练基于上节反馈制定）
   isExperience: boolean
   bookingId?: string
+}
+
+// ---------------- 团课（前台为会员报名，报名时读取风险动作限制） ----------------
+export type ClassIntensity = '低强度' | '中强度' | '高强度'
+
+export interface GroupClass {
+  id: string
+  name: string             // 如「脊柱养护 · 阴瑜伽」
+  coachId: string
+  date: string             // YYYY-MM-DD
+  time: string
+  intensity: ClassIntensity
+  capacity: number
+  enrolledMemberIds: string[]
+  featuredMoves: string[]  // 本节课主要体式（用于与禁止动作比对）
+  note: string
 }
 
 // ---------------- 课后训练记录（教练填写） ----------------
@@ -182,6 +245,7 @@ export type TimelineKind =
   | '预约体验' | '安排体验' | '体验测评' | '购课' | '排课'
   | '上课记录' | '请假' | '改期' | '不适上报' | '课程调整'
   | '更换教练' | '续费' | '投诉' | '工单处理'
+  | '风险限制' | '风险确认' | '团课报名'
 
 export interface TimelineEvent {
   id: string

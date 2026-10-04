@@ -14,6 +14,7 @@ const ConsultantDashboard = () => import('../views/consultant/ConsultantDashboar
 const ArrangeExperience = () => import('../views/consultant/ArrangeExperience.vue')
 const TicketsBoard = () => import('../views/consultant/TicketsBoard.vue')
 const Member360 = () => import('../views/consultant/Member360.vue')
+const GroupClasses = () => import('../views/consultant/GroupClasses.vue')
 
 export const router = createRouter({
   history: createWebHashHistory(),
@@ -30,6 +31,7 @@ export const router = createRouter({
     { path: '/consultant', component: ConsultantDashboard, meta: { role: 'consultant' } },
     { path: '/consultant/arrange', component: ArrangeExperience, meta: { role: 'consultant' } },
     { path: '/consultant/tickets', component: TicketsBoard, meta: { role: 'consultant' } },
+    { path: '/consultant/classes', component: GroupClasses, meta: { role: 'consultant' } },
     { path: '/consultant/member/:id', component: Member360, meta: { role: 'consultant' } },
     { path: '/:pathMatch(.*)*', redirect: '/login' },
   ],
